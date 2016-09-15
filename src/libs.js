@@ -174,7 +174,6 @@ var rootLayout = layout(function (el, ctx, c) {
 		ctx.top,
 		ctx.left,
 	], function () {
-		console.log('aoeu');
 		stream.push(displayedS, true);
 	});
 	return c(ctx.child());
@@ -496,6 +495,7 @@ var pushOnClick = function (s, f) {
 
 var hoverThis = function (cb) {
   return passthrough(function ($el) {
+		$el.css('pointer-events', 'initial');
 		cb(false, $el);
 		$el.on('mouseover', function (ev) {
 			cb(true, $el, ev);
@@ -555,16 +555,17 @@ var withFontColor = function (fc) {
 		$el.css('color', colorString(fc));
   });
 };
-// var hoverColor = function (backgroundColor, hoverBackgroundColor, fontColor, hoverFontColor) {
-// 	backgroundColor = colorString(backgroundColor || transparent);
-// 	hoverBackgroundColor = colorString(hoverBackgroundColor || backgroundColor);
-// 	fontColor = colorString(fontColor || black);
-// 	hoverFontColor = colorString(hoverFontColor || fontColor);
-// 	return hoverThis(function (h, $el) {
-// 		$el.css('background-color', h ? hoverBackgroundColor : backgroundColor);
-// 		$el.css('color', h ? hoverFontColor : fontColor);
-// 	});
-// };
+var hoverColor = function (config) {
+	var backgroundColor = colorString(config.backgroundColor || transparent);
+	var hoverBackgroundColor = colorString(config.hoverBackgroundColor || backgroundColor);
+	var fontColor = colorString(config.fontColor || black);
+	var hoverFontColor = colorString(config.hoverFontColor || fontColor);
+	return hoverThis(function (h, $el) {
+		$el.css('transition', 'background-color ease ' + config.transition + 's' + ', color ease ' + config.transition + 's');
+		$el.css('background-color', h ? hoverBackgroundColor : backgroundColor);
+		$el.css('color', h ? hoverFontColor : fontColor);
+	});
+};
 
 var crop = function (amount) {
   var top = amount.all || 0,
@@ -755,10 +756,13 @@ var image = function (config) {
   });
 };
 
-var linkTo = function (href) {
+var linkTo = function (href, targetBlank) {
   return layout(a, function ($el, ctx, c) {
 		$el.prop('href', href);
 		$el.css('pointer-events', 'initial');
+		if (targetBlank) {
+			$el.prop('target', '_blank');
+		}
 		return c(ctx.child());
   });
 };
@@ -800,6 +804,9 @@ var text = function (strs, config) {
 			}
 			if (c.weight) {
 				$span.css('font-weight', c.weight);
+			}
+			if (c.lineHeight) {
+				$span.css('line-height', c.lineHeight);
 			}
 			if (c.family) {
 				$span.css('font-family', c.family);
@@ -855,6 +862,17 @@ var text = function (strs, config) {
 			}
 			else {
 				$el.css('font-weight', config.weight);
+			}
+		}
+		if (config.lineHeight) {
+			if (stream.isStream(config.lineHeight)) {
+				stream.map(config.lineHeight, function (lineHeight) {
+					$el.css('line-height', lineHeight);
+					pushDimensions();
+				});
+			}
+			else {
+				$el.css('line-height', config.lineHeight);
 			}
 		}
 		if (config.family) {
@@ -945,6 +963,15 @@ var centerSurplusWidth = function (gridWidth, positions) {
 		position.left += surplusWidth / 2;
   });
   return positions;
+};
+var divvySurplusWidth = function (among) {
+	return function (gridWidth, positions) {
+		var lastPosition = positions[positions.length - 1];
+		var surplusWidth = gridWidth - (lastPosition.left + lastPosition.width);
+		if (surplusWidth > 0) {
+			var widthPerCol = surplusWidth / among[0].length;
+		}
+	};
 };
 var evenSplitSurplusWidth = function (gridWidth, positions) {
   var lastPosition = positions[positions.length - 1];
@@ -1112,65 +1139,98 @@ var giveHeightToLast = function (totalHeight, positions) {
   });
   return positions;
 };
-var slideshow = function (config, cs) {
+var slideshow = function (config) {
   config.padding = config.padding || 0;
-  config.leftTransition = config.leftTransition || 'none';
-  config.alwaysFullWidth = config.alwaysFullWidth || false;
+	config.transitionTime = config.transitionTime || 0;
   return layout(function ($el, ctx, cs) {
 		$el.css('overflow', 'hidden');
 		$el.addClass('slideshow');
 
-		var contexts = cs.map(function () {
+		var contexts = cs.concat(cs).concat(cs).map(function () {
 			return ctx.child({
 				left: true,
-				width: true,
 			});
 		});
-		var is = cs.map(function (c, index) {
+		var is = cs.concat(cs).concat(cs).map(function (c, index) {
 			return c(contexts[index]);
 		});
-		is.map(function (i) {
-			i.$el.css('transition', 'left ' + config.leftTransition);
-		});
+
+		// the state
+		var segmentOrder = [0, 1, 2];
+
+		var findSegment = function (index) {
+			return modulo(Math.floor((index + cs.length) / cs.length), 3);
+		};
 
 		var allMinWidths = mapMinWidths(is);
 		var allMinHeights = mapMinHeights(is);
 
+		var computePositions = function (selected, width, mws, mhs, warpIndex) {
+			return mws.map(function (mw, index) {
+				var thisSegment = Math.floor(index / cs.length);
+				var thisSegmentIndex = segmentOrder.indexOf(thisSegment);
+				var offset = modulo(index, cs.length) - modulo(selected, cs.length);
+				return {
+					left: (offset + (thisSegmentIndex - 1) * cs.length) * (width + config.padding),
+					warp: thisSegmentIndex === warpIndex,
+				};
+			});
+		};
+
+		var moveSlideshow = function (positions, selectedIndex, teleport, cb) {
+			positions.map(function (position, index) {
+				var ctx = contexts[index];
+				is[index].$el.css('transition', position.warp ? '' : 'left ease ' + config.transitionTime + 's');
+				stream.push(ctx.left, position.left);
+			});
+			cb && setTimeout(function () {
+				cb();
+			}, 500);
+		};
+
+		var modulo = function (a, b) {
+			return ((a % b) + b) % b;
+		};
+
+		var selectedIndexS = stream.reduce(config.moveS, function (a, b) {
+			return a + b.amount;
+		}, 0);
 		var minHeight = stream.combine([
-			config.selectedS,
+			selectedIndexS,
 			ctx.width,
 			allMinWidths,
 			allMinHeights,
-		], function (selected, width, mws, mhs) {
-			var selectedLeft = 0;
-			var selectedWidth = 0;
-			var left = 0;
-			var positions = mws.map(function (mw, index) {
-				mw = config.alwaysFullWidth ? width : mw;
-				if (selected === index) {
-					selectedLeft = left + config.padding * index;
-					selectedWidth = mw;
-				}
-				var position = {
-					left: left + config.padding * index,
-					width: mw,
-				};
-				left += mw;
-				return position;
-			});
-			var dLeft = (width - selectedWidth) / 2 - selectedLeft;
-			positions.map(function (position) {
-				position.left += dLeft;
-			});
-
-			positions.map(function (position, index) {
-				var ctx = contexts[index];
-				stream.push(ctx.left, position.left);
-				stream.push(ctx.width, position.width);
-			});
-
+		], function (selectedIndex, width, mws, mhs) {
+			var selectedIndexModuloCs = modulo(selectedIndex, cs.length);
+			var targetSegment = findSegment(selectedIndex);
+			var targetSegmentIndex = segmentOrder.indexOf(targetSegment);
+			var positions;
+			switch (targetSegmentIndex) {
+			case 0:
+				segmentOrder = [
+					segmentOrder[2],
+					segmentOrder[0],
+					segmentOrder[1],
+				];
+				positions = computePositions(selectedIndexModuloCs + cs.length, width, mws, mhs, 0);
+				moveSlideshow(positions, selectedIndexModuloCs + cs.length);
+				break;
+			case 1:
+				positions = computePositions(selectedIndexModuloCs + cs.length, width, mws, mhs);
+				moveSlideshow(positions, selectedIndexModuloCs + cs.length);
+				break;
+			case 2:
+				segmentOrder = [
+					segmentOrder[1],
+					segmentOrder[2],
+					segmentOrder[0],
+				];
+				positions = computePositions(selectedIndexModuloCs + cs.length, width, mws, mhs, 2);
+				moveSlideshow(positions, selectedIndexModuloCs + cs.length);
+				break;
+			}
 			return constant(mhs.map(function (mh, i) {
-				return mh(positions[i].width);
+				return mh(width);
 			}).reduce(mathMax, 0));
 		});
 		stream.push(minHeight, constant(0));
@@ -2819,6 +2879,52 @@ var minHeightAtLeast = function (number) {
 // // 							   });
 // // 	}, c);
 // // };
+
+var largestWidthThatFits = function (config) {
+	return layout(function ($el, ctx, cs) {
+		$el.addClass('largest-width-that-fits');
+		var is = cs.map(function (c) {
+			return c(ctx.child());
+		});
+		var allMinWidths = mapMinWidths(is);
+		var allMinHeights = mapMinHeights(is);
+		var chooseIndex = function (w, mws) {
+			var index = mws.reduce(function (a, mw, index) {
+				return (mw <= w) && (a === null || mw > a.mw) ? {
+					mw: mw,
+					index: index,
+				} : a;
+			}, null).index;
+			if (index === null) {
+				console.log('none small enough, TODO: use smallest');
+			}
+			return index;
+		};
+		stream.combine([
+			ctx.width,
+			allMinWidths,
+		], function (w, mws) {
+			var i = chooseIndex(w, mws);
+			is.map(function (instance, index) {
+				instance.$el.css('display', (index === i) ? '' : 'none');
+			});
+		});
+		return {
+			minWidth: stream.map(allMinWidths, function (mws) {
+				return mws.reduce(mathMax, 0);
+			}),
+			minHeight: stream.combine([
+				allMinWidths,
+				allMinHeights,
+			], function (mws, mhs) {
+				return function (w) {
+					var i = chooseIndex(w, mws);
+					return mhs[i](w);
+				};
+			}),
+		};
+	});
+};
 
 var overlays = function (config) {
   return layout(function ($el, ctx, cs) {

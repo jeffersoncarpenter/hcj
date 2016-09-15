@@ -328,14 +328,13 @@ var updateDomFunc = function ($el, prop, value) {
 
 var measureWidth = function ($el, w) {
 	var $sandbox = $('.sandbox');
-	var loginText = $el.text().indexOf('Log In') !== -1;
 	var $clone = $el.clone();
 	$clone.css('width', w ? px(w) : '')
 		.css('height', '')
 		.css('display', 'inline-block')
 		.appendTo($sandbox);
 
-	var width = $clone[0].scrollWidth;
+	var width = parseFloat($clone.css('width'));
 	$clone.remove();
 
 	return width;
